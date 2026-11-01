@@ -1,0 +1,4 @@
+[
+  {"kind": "url", "feature": "incoming", "enabled": false},
+  {"kind": "url", "feature": "outgoing", "enabled": false}
+]

@@ -1,0 +1,22 @@
+[
+  {"kind": "xpc", "function": "xpc_connection_send_message"},
+  {"kind": "xpc", "function": "xpc_connection_send_message_with_reply"},
+  {"kind": "xpc", "function": "xpc_connection_send_message_with_reply_sync"},
+  {"kind": "xpc", "function": "xpc_connection_send_notification", "optional": true},
+  {"kind": "xpc", "function": "xpc_connection_set_event_handler"},
+  {"kind": "nsxpc", "feature": "connections"},
+  {"kind": "nsxpc", "feature": "listeners"},
+  {"kind": "nsxpc", "feature": "replies", "enabled": false},
+  {"kind": "url", "feature": "incoming"},
+  {"kind": "url", "feature": "outgoing"},
+  {"kind": "notify", "function": "notify_post"},
+  {"kind": "notify", "function": "notify_register_dispatch", "optional": true},
+  {"kind": "notify", "function": "notify_register_check", "optional": true},
+  {"kind": "notify", "function": "notify_register_mach_port", "optional": true},
+  {"kind": "notify", "function": "notify_register_file_descriptor", "optional": true},
+  {"kind": "webview", "feature": "bridges", "enabled": false},
+  {"kind": "webview", "feature": "loads", "enabled": false},
+  {"kind": "webview", "feature": "navigation", "enabled": false},
+  {"kind": "webview", "feature": "schemes", "enabled": false},
+  {"kind": "network", "feature": "requests", "enabled": false}
+]

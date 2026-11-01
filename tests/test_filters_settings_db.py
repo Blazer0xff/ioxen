@@ -1,0 +1,421 @@
+import os
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from ioxen.db import ProjectDB
+from ioxen.filters import FilterManager
+from ioxen.history_columns import parse_history_column_width
+from ioxen.settings import load_settings, save_settings, settings_file_path
+
+
+class FilterManagerTests(unittest.TestCase):
+    def test_from_saved_preserves_next_id(self):
+        manager = FilterManager.from_saved([
+            {"id": 4, "type": "focus", "rule": {"method": "sendBroadcast"}, "enabled": True}
+        ])
+
+        msg = manager.add("ignore", ["class=com.example.*"])
+
+        self.assertIn("filter #5", msg)
+        self.assertEqual(
+            manager.export(),
+            [
+                {"id": 4, "type": "focus", "rule": {"method": "sendBroadcast"}, "enabled": True},
+                {"id": 5, "type": "ignore", "rule": {"class": "com.example.*"}, "enabled": True},
+            ],
+        )
+
+    def test_export_returns_copy(self):
+        manager = FilterManager()
+        manager.add("ignore", ["method=notify_post"])
+
+        exported = manager.export()
+        exported.clear()
+
+        ignore, focus = manager.get_active()
+        self.assertEqual(ignore, [{"method": "notify_post"}])
+        self.assertEqual(focus, [])
+
+    def test_from_saved_discards_invalid_filters(self):
+        manager = FilterManager.from_saved([
+            {"id": 2, "type": "ignore", "rule": {"method": "xpc_connection_send_message"}, "enabled": True},
+            {"id": "bad", "type": "ignore", "rule": {"method": "notify_post"}, "enabled": True},
+            {"id": 3, "type": "unknown", "rule": {"method": "sendBroadcast"}, "enabled": True},
+            {"id": 4, "type": "focus", "rule": {"bad": "key"}, "enabled": True},
+            {"id": 5, "type": "focus", "rule": {"flags": 1}, "enabled": True},
+            "not-a-filter",
+        ])
+
+        self.assertEqual(
+            manager.export(),
+            [{"id": 2, "type": "ignore", "rule": {"method": "xpc_connection_send_message"}, "enabled": True}],
+        )
+
+        msg = manager.add("focus", ["action=fetchItem:withReply:"])
+        self.assertIn("filter #3", msg)
+
+    def test_get_active_returns_copies(self):
+        manager = FilterManager()
+        manager.add("ignore", ["method=notify_post"])
+
+        ignore, _focus = manager.get_active()
+        ignore[0]["method"] = "changed"
+
+        ignore_again, _focus_again = manager.get_active()
+        self.assertEqual(ignore_again, [{"method": "notify_post"}])
+
+    def test_add_rejects_invalid_filter_type(self):
+        manager = FilterManager()
+
+        msg = manager.add("bad", ["method=notify_post"])
+
+        self.assertIn("Unknown filter type", msg)
+        self.assertEqual(manager.export(), [])
+
+    def test_is_visible_uses_ignore_filters_when_no_focus_filter_exists(self):
+        manager = FilterManager()
+        manager.add("ignore", ["method=xpc_connection_send_message"])
+
+        self.assertFalse(manager.is_visible({"method": "xpc_connection_send_message"}))
+        self.assertTrue(manager.is_visible({"method": "sendBroadcast"}))
+
+    def test_is_visible_focus_filters_take_precedence_over_ignore_filters(self):
+        manager = FilterManager()
+        manager.add("ignore", ["method=xpc_connection_send_message"])
+        manager.add("focus", ["action=fetchItem:withReply:"])
+
+        self.assertTrue(manager.is_visible({
+            "method": "xpc_connection_send_message",
+            "action": "fetchItem:withReply:",
+        }))
+        self.assertFalse(manager.is_visible({
+            "method": "sendBroadcast",
+            "action": "storeItem:withReply:",
+        }))
+
+
+class SettingsTests(unittest.TestCase):
+    def test_settings_file_uses_xdg_config_home_on_linux(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("sys.platform", "linux"):
+                with patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}, clear=False):
+                    self.assertEqual(settings_file_path(), Path(tmp) / "ioxen" / "settings.txt")
+
+    def test_settings_file_uses_application_support_on_macos(self):
+        with patch("sys.platform", "darwin"):
+            self.assertEqual(
+                settings_file_path(),
+                Path.home() / "Library" / "Application Support" / "ioxen" / "settings.txt",
+            )
+
+    def test_settings_file_uses_appdata_on_windows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("sys.platform", "win32"):
+                with patch.dict(os.environ, {"APPDATA": tmp}, clear=False):
+                    self.assertEqual(settings_file_path(), Path(tmp) / "ioxen" / "settings.txt")
+
+    def test_load_settings_uses_defaults_for_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "settings.txt")
+            self.assertEqual(
+                load_settings(path),
+                {
+                    "stack": False,
+                    "stack_depth": 15,
+                    "intercept": False,
+                    "intercept_command_bar": True,
+                    "history_command_bar": True,
+                },
+            )
+
+    def test_save_and_load_settings_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config", "settings.txt")
+            save_settings({
+                "stack": True,
+                "stack_depth": 7,
+                "intercept": False,
+                "intercept_command_bar": False,
+                "history_command_bar": True,
+            }, path)
+            self.assertEqual(
+                load_settings(path),
+                {
+                    "stack": True,
+                    "stack_depth": 7,
+                    "intercept": False,
+                    "intercept_command_bar": False,
+                    "history_command_bar": True,
+                },
+            )
+
+    def test_load_settings_ignores_invalid_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "settings.txt")
+            with open(path, "w") as f:
+                f.write("stack=maybe\n")
+                f.write("stack_depth=0\n")
+                f.write("intercept=disabled\n")
+                f.write("intercept_command_bar=hidden\n")
+                f.write("history_command_bar=visible\n")
+
+            self.assertEqual(
+                load_settings(path),
+                {
+                    "stack": False,
+                    "stack_depth": 15,
+                    "intercept": False,
+                    "intercept_command_bar": True,
+                    "history_command_bar": True,
+                },
+            )
+
+    def test_load_settings_accepts_valid_off_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "settings.txt")
+            with open(path, "w") as f:
+                f.write("stack=off\n")
+                f.write("stack_depth=3\n")
+                f.write("intercept=off\n")
+                f.write("intercept_command_bar=off\n")
+                f.write("history_command_bar=off\n")
+
+            self.assertEqual(
+                load_settings(path),
+                {
+                    "stack": False,
+                    "stack_depth": 3,
+                    "intercept": False,
+                    "intercept_command_bar": False,
+                    "history_command_bar": False,
+                },
+            )
+
+
+class HistoryColumnWidthTests(unittest.TestCase):
+    def test_parse_history_column_width_accepts_auto_and_empty_values(self):
+        self.assertEqual(parse_history_column_width("auto"), (None, ""))
+        self.assertEqual(parse_history_column_width(""), (None, ""))
+
+    def test_parse_history_column_width_rejects_non_numeric_values_with_auto_hint(self):
+        self.assertEqual(
+            parse_history_column_width("wide"),
+            (None, "Width must be a number or auto"),
+        )
+
+    def test_parse_history_column_width_validates_range(self):
+        self.assertEqual(parse_history_column_width("5"), (5, ""))
+        self.assertEqual(parse_history_column_width("150"), (150, ""))
+        self.assertEqual(
+            parse_history_column_width("4"),
+            (None, "Width must be auto or between 5 and 150"),
+        )
+
+
+class ProjectDBTests(unittest.TestCase):
+    def test_open_existing_migrates_legacy_intents_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "legacy.ioxen")
+            conn = sqlite3.connect(path)
+            conn.executescript("""
+                CREATE TABLE project_info (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT
+                );
+                CREATE TABLE intents (
+                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp            TEXT    NOT NULL,
+                    class                TEXT,
+                    method               TEXT,
+                    action               TEXT,
+                    component            TEXT,
+                    data                 TEXT,
+                    flags                TEXT,
+                    categories           TEXT,
+                    extras               TEXT,
+                    stack_trace          TEXT,
+                    pending_intent_flags INTEGER
+                );
+            """)
+            conn.commit()
+            conn.close()
+
+            db = ProjectDB(path)
+            db.open_existing()
+            db.close()
+
+            conn = sqlite3.connect(path)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(intents)")}
+            conn.close()
+
+            self.assertIn("outcome", columns)
+            self.assertIn("original_intent", columns)
+
+    def test_filter_lists_roundtrip_through_project_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "project.ioxen")
+            db = ProjectDB(path)
+            db.create("project")
+            filters = [
+                {"id": 1, "type": "ignore", "rule": {"method": "xpc_connection_send_message"}, "enabled": True}
+            ]
+            db.save_intercept_filters(filters)
+            db.save_history_filters(filters)
+            db.close()
+
+            reopened = ProjectDB(path)
+            reopened.open_existing()
+            self.assertEqual(reopened.load_intercept_filters(), filters)
+            self.assertEqual(reopened.load_history_filters(), filters)
+            reopened.close()
+
+    def test_session_file_paths_roundtrip_through_project_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "project.ioxen")
+            db = ProjectDB(path)
+            db.create("project")
+            db.save_hook_config_path("/tmp/hooks.json")
+            db.save_extra_script_path("/tmp/extra.js")
+            db.close()
+
+            reopened = ProjectDB(path)
+            reopened.open_existing()
+            self.assertEqual(reopened.load_hook_config_path(), "/tmp/hooks.json")
+            self.assertEqual(reopened.load_extra_script_path(), "/tmp/extra.js")
+
+            reopened.save_hook_config_path("")
+            reopened.save_extra_script_path("")
+            reopened.close()
+
+            cleared = ProjectDB(path)
+            cleared.open_existing()
+            self.assertEqual(cleared.load_hook_config_path(), "")
+            self.assertEqual(cleared.load_extra_script_path(), "")
+            cleared.close()
+
+    def test_history_column_widths_roundtrip_through_project_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "project.ioxen")
+            db = ProjectDB(path)
+            db.create("project")
+            db.save_history_column_widths({
+                "time": 19,
+                "method": 12,
+                "class": "40",
+                "component": 150,
+                "action": 4,
+                "unknown": 20,
+            })
+            db.close()
+
+            reopened = ProjectDB(path)
+            reopened.open_existing()
+            self.assertEqual(
+                reopened.load_history_column_widths(),
+                {"time": 19, "method": 12, "class": 40, "component": 150},
+            )
+            reopened.close()
+
+    def test_invalid_project_info_json_falls_back_to_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "project.ioxen")
+            db = ProjectDB(path)
+            db.create("project")
+            db.set_info("intercept_filters", "{not-json")
+            db.set_info("history_filters", '{"bad": "shape"}')
+            db.set_info("history_columns", '{"bad": "shape"}')
+            db.set_info("history_column_widths", '["bad"]')
+
+            self.assertEqual(db.load_intercept_filters(), [])
+            self.assertEqual(db.load_history_filters(), [])
+            self.assertIsNone(db.load_history_columns())
+            self.assertEqual(db.load_history_column_widths(), {})
+            db.close()
+
+    def test_invalid_intent_json_uses_safe_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "project.ioxen")
+            db = ProjectDB(path)
+            db.create("project")
+            db.save_intent({
+                "timestamp": "2026-04-29T10:00:00+00:00",
+                "intent": {
+                    "categories": ["legacy.category"],
+                    "extras": {"token": "value"},
+                    "flags": 1,
+                },
+                "stackTrace": ["frame"],
+            })
+            db.close()
+
+            conn = sqlite3.connect(path)
+            conn.execute(
+                """UPDATE intents SET
+                   categories=?, extras=?, stack_trace=?, original_intent=?
+                   WHERE id=1""",
+                ("{bad-json", "{bad-json", "{bad-json", "{bad-json"),
+            )
+            conn.commit()
+            conn.close()
+
+            reopened = ProjectDB(path)
+            entries = reopened.open_existing()
+            reopened.close()
+
+            self.assertEqual(entries[0]["intent"]["categories"], [])
+            self.assertEqual(entries[0]["intent"]["extras"], {})
+            self.assertEqual(entries[0]["stackTrace"], [])
+            self.assertIsNone(entries[0]["original_intent"])
+            self.assertEqual(len(reopened.load_warnings), 4)
+
+    def test_project_info_is_key_value_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "project.ioxen")
+            db = ProjectDB(path)
+            db.create("project")
+            db.set_info("target", "com.example.app")
+            db.close()
+
+            conn = sqlite3.connect(path)
+            rows = dict(conn.execute("SELECT key, value FROM project_info").fetchall())
+            conn.close()
+
+            self.assertEqual(rows["name"], "project")
+            self.assertEqual(rows["target"], "com.example.app")
+
+    def test_update_modified_intent_persists_changes_and_original(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "project.ioxen")
+            db = ProjectDB(path)
+            db.create("project")
+            intent_id = db.save_intent({
+                "timestamp": "2026-04-29T10:00:00+00:00",
+                "class": "MyApp",
+                "method": "notify_post",
+                "intent": {
+                    "action": "openURL",
+                    "data": "myapp://old",
+                    "extras": {"token": {"type": "string", "value": "old"}},
+                },
+            })
+            db.update_modified_intent(
+                intent_id,
+                {"action": "openURL", "data": "myapp://old", "extras": {"token": {"type": "string", "value": "old"}}},
+                {"action": "openURL", "data": "myapp://new", "extras": {"token": {"type": "string", "value": "new"}}},
+            )
+            db.close()
+
+            reopened = ProjectDB(path)
+            entries = reopened.open_existing()
+            reopened.close()
+
+            self.assertEqual(entries[0]["intent"]["data"], "myapp://new")
+            self.assertEqual(entries[0]["intent"]["extras"]["token"]["value"], "new")
+            self.assertEqual(entries[0]["original_intent"]["data"], "myapp://old")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,16 @@
+{
+  "name": "ioxen-agent",
+  "private": true,
+  "scripts": {
+    "build": "npm run build:ios && npm run sync:runtime",
+    "build:ios": "frida-compile agent/ios_script.js -o agent/ios_script_bundle.js -T none --bundle-format iife",
+    "sync:runtime": "node scripts/sync-runtime-assets.js",
+    "test:agent": "node --test tests/js/*.test.mjs"
+  },
+  "devDependencies": {
+    "frida-compile": "^19"
+  },
+  "dependencies": {
+    "frida-objc-bridge": "^8"
+  }
+}

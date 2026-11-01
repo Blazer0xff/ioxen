@@ -1,0 +1,10 @@
+[
+  {"kind": "nsxpc", "feature": "replies", "enabled": true},
+  {"kind": "url", "feature": "incoming", "enabled": false},
+  {"kind": "url", "feature": "outgoing", "enabled": false},
+  {"kind": "notify", "function": "notify_post", "enabled": false},
+  {"kind": "notify", "function": "notify_register_dispatch", "enabled": false},
+  {"kind": "notify", "function": "notify_register_check", "enabled": false},
+  {"kind": "notify", "function": "notify_register_mach_port", "enabled": false},
+  {"kind": "notify", "function": "notify_register_file_descriptor", "enabled": false}
+]

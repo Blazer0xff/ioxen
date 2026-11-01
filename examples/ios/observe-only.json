@@ -1,0 +1,16 @@
+[
+  {"kind": "xpc", "function": "xpc_connection_send_message", "intercept": false},
+  {"kind": "xpc", "function": "xpc_connection_send_message_with_reply", "intercept": false},
+  {"kind": "xpc", "function": "xpc_connection_send_message_with_reply_sync", "intercept": false},
+  {"kind": "xpc", "function": "xpc_connection_send_notification", "intercept": false},
+  {"kind": "xpc", "function": "xpc_connection_set_event_handler", "intercept": false},
+  {"kind": "nsxpc", "feature": "connections", "intercept": false},
+  {"kind": "nsxpc", "feature": "listeners", "intercept": false},
+  {"kind": "url", "feature": "incoming", "intercept": false},
+  {"kind": "url", "feature": "outgoing", "intercept": false},
+  {"kind": "notify", "function": "notify_post", "intercept": false},
+  {"kind": "notify", "function": "notify_register_dispatch", "intercept": false},
+  {"kind": "notify", "function": "notify_register_check", "intercept": false},
+  {"kind": "notify", "function": "notify_register_mach_port", "intercept": false},
+  {"kind": "notify", "function": "notify_register_file_descriptor", "intercept": false}
+]
